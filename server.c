@@ -7,9 +7,11 @@
 #define BUFFER_SIZE 104857600
 
 #pragma comment(lib, "ws2_32.lib")
+
 //AF_INET: use IPv4 (vs IPv6)
 //SOCK_STREAM: use TCP (vs UDP)
 //INADDR_ANY: the server accepts connections from any network interface
+
 int main(int argc, char *argv[]) {
     int server_fd;
     struct sockaddr_in server_addr;
@@ -24,5 +26,20 @@ int main(int argc, char *argv[]) {
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
+
+    // bind socket to port
+    if(bind(server_fd,
+            (struct sockaddr * )&server_addr,
+            sizeof(server_addr)) < 0){
+        perror("listen failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // listen for connections
+    if(listen(server_fd, 10) < 0){
+        perror("listen failed");
+        exit(EXIT_FAILURE);
+    }
+
 }
 
