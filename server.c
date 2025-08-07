@@ -76,6 +76,10 @@ DWORD WINAPI handle_client(LPVOID arg) {
     return 0;
 }
 
+//AF_INET: use IPv4 (vs IPv6)
+//SOCK_STREAM: use TCP (vs UDP)
+//INADDR_ANY: the server accepts connections from any network interface
+
 int main() {
     WSADATA wsa;
     SOCKET server_fd;
