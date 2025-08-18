@@ -3,11 +3,65 @@
 #include <string.h>
 #include <winsock2.h>
 #include <windows.h>
+#include <stdbool.h>
 
 #define PORT 8080
-#define BUFFER_SIZE 8192
+#define BUFFER_SIZE 104857600
+#define strcasecmp _stricmp
 
 #pragma comment(lib, "ws2_32.lib")
+
+const char *get_file_extension(const char *file_name) {
+    const char *dot = strrchr(file_name, '.');
+    if (!dot || dot == file_name) {
+        return "";
+    }
+    return dot + 1;
+}
+
+const char *get_mime_type(const char *file_ext) {
+    if (strcasecmp(file_ext, "html") == 0 || strcasecmp(file_ext, "htm") == 0) {
+        return "text/html";
+    } else if (strcasecmp(file_ext, "txt") == 0) {
+        return "text/plain";
+    } else if (strcasecmp(file_ext, "jpg") == 0 || strcasecmp(file_ext, "jpeg") == 0) {
+        return "image/jpeg";
+    } else if (strcasecmp(file_ext, "png") == 0) {
+        return "image/png";
+    } else {
+        return "application/octet-stream";
+    }
+}
+
+bool case_insensitive_compare(const char *s1, const char *s2) {
+    while (*s1 && *s2) {
+        if (tolower((unsigned char)*s1) != tolower((unsigned char)*s2)) {
+            return false;
+        }
+        s1++;
+        s2++;
+    }
+    return *s1 == *s2;
+}
+
+char *get_file_case_insensitive(const char *file_name) {
+    WIN32_FIND_DATA findFileData;
+    HANDLE hFind = FindFirstFile("*", &findFileData);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        return NULL;
+    }
+
+    do {
+        if (_stricmp(findFileData.cFileName, file_name) == 0) {
+            FindClose(hFind);
+            return _strdup(findFileData.cFileName); // return copy of name
+        }
+    } while (FindNextFile(hFind, &findFileData) != 0);
+
+    FindClose(hFind);
+    return NULL;
+}
+
 
 char *url_decode(const char *src) {
     char *dest = (char *)malloc(strlen(src) + 1);
