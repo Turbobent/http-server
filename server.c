@@ -4,13 +4,15 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 #define PORT 8080
-#define BUFFER_SIZE 104857600
+#define BUFFER_SIZE 8192
 #define strcasecmp _stricmp
 
 #pragma comment(lib, "ws2_32.lib")
 
+// Get file extension
 const char *get_file_extension(const char *file_name) {
     const char *dot = strrchr(file_name, '.');
     if (!dot || dot == file_name) {
@@ -19,6 +21,7 @@ const char *get_file_extension(const char *file_name) {
     return dot + 1;
 }
 
+// Map extension to MIME type
 const char *get_mime_type(const char *file_ext) {
     if (strcasecmp(file_ext, "html") == 0 || strcasecmp(file_ext, "htm") == 0) {
         return "text/html";
@@ -33,36 +36,7 @@ const char *get_mime_type(const char *file_ext) {
     }
 }
 
-bool case_insensitive_compare(const char *s1, const char *s2) {
-    while (*s1 && *s2) {
-        if (tolower((unsigned char)*s1) != tolower((unsigned char)*s2)) {
-            return false;
-        }
-        s1++;
-        s2++;
-    }
-    return *s1 == *s2;
-}
-
-char *get_file_case_insensitive(const char *file_name) {
-    WIN32_FIND_DATA findFileData;
-    HANDLE hFind = FindFirstFile("*", &findFileData);
-    if (hFind == INVALID_HANDLE_VALUE) {
-        return NULL;
-    }
-
-    do {
-        if (_stricmp(findFileData.cFileName, file_name) == 0) {
-            FindClose(hFind);
-            return _strdup(findFileData.cFileName); // return copy of name
-        }
-    } while (FindNextFile(hFind, &findFileData) != 0);
-
-    FindClose(hFind);
-    return NULL;
-}
-
-
+// Decode URL encoding (%20 → space)
 char *url_decode(const char *src) {
     char *dest = (char *)malloc(strlen(src) + 1);
     char *pout = dest;
@@ -82,27 +56,57 @@ char *url_decode(const char *src) {
     return dest;
 }
 
-const char *get_file_extension(const char *filename) {
-    const char *dot = strrchr(filename, '.');
-    return dot ? dot + 1 : "";
-}
+// Send HTTP response with file
+void build_http_response(SOCKET client_fd, const char *file_name, const char *file_ext) {
+    FILE *file = fopen(file_name, "rb");
+    if (!file) {
+        // 404 response
+        const char *body = "<html><body><h1>404 Not Found</h1></body></html>";
+        char header[256];
+        int header_len = sprintf(header,
+            "HTTP/1.1 404 Not Found\r\n"
+            "Content-Type: text/html\r\n"
+            "Content-Length: %d\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            (int)strlen(body));
 
-void build_http_response(const char *file_name, const char *file_ext, char *response, size_t *response_len) {
-    const char *body = "<html><body><h1>Hello, World!</h1></body></html>";
-    const char *header_format =
+        send(client_fd, header, header_len, 0);
+        send(client_fd, body, (int)strlen(body), 0);
+        return;
+    }
+
+    // get file size
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    const char *mime_type = get_mime_type(file_ext);
+
+    char header[512];
+    int header_len = sprintf(header,
         "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/html\r\n"
-        "Content-Length: %d\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %ld\r\n"
         "Connection: close\r\n"
-        "\r\n";
+        "\r\n",
+        mime_type, file_size);
 
-    sprintf(response, header_format, (int)strlen(body));
-    strcat(response, body);
-    *response_len = strlen(response);
+    send(client_fd, header, header_len, 0);
+
+    // send file in chunks
+    char buffer[BUFFER_SIZE];
+    size_t bytes;
+    while ((bytes = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        send(client_fd, buffer, (int)bytes, 0);
+    }
+
+    fclose(file);
 }
 
+// Handle client in thread
 DWORD WINAPI handle_client(LPVOID arg) {
-    int client_fd = *((int *)arg);
+    SOCKET client_fd = *((SOCKET *)arg);
     free(arg);
 
     char buffer[BUFFER_SIZE];
@@ -115,12 +119,15 @@ DWORD WINAPI handle_client(LPVOID arg) {
         if (sscanf(buffer, "%s %s", method, path) == 2 && strcmp(method, "GET") == 0) {
             const char *url_encoded_file_name = path[0] == '/' ? path + 1 : path;
             char *file_name = url_decode(url_encoded_file_name);
-            const char *file_ext = get_file_extension(file_name);
 
-            char response[BUFFER_SIZE * 2];
-            size_t response_len = 0;
-            build_http_response(file_name, file_ext, response, &response_len);
-            send(client_fd, response, (int)response_len, 0);
+            // fallback: serve index.html if no file given
+            if (strlen(file_name) == 0) {
+                free(file_name);
+                file_name = _strdup("index.html");
+            }
+
+            const char *file_ext = get_file_extension(file_name);
+            build_http_response(client_fd, file_name, file_ext);
 
             free(file_name);
         }
@@ -129,10 +136,6 @@ DWORD WINAPI handle_client(LPVOID arg) {
     closesocket(client_fd);
     return 0;
 }
-
-//AF_INET: use IPv4 (vs IPv6)
-//SOCK_STREAM: use TCP (vs UDP)
-//INADDR_ANY: the server accepts connections from any network interface
 
 int main() {
     WSADATA wsa;
@@ -185,7 +188,7 @@ int main() {
             continue;
         }
 
-        int *client_fd = malloc(sizeof(int));
+        SOCKET *client_fd = malloc(sizeof(SOCKET));
         *client_fd = client_socket;
         CreateThread(NULL, 0, handle_client, client_fd, 0, NULL);
     }
